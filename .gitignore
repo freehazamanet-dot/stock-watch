@@ -1,0 +1,13 @@
+venv/
+__pycache__/
+*.pyc
+logs/
+.DS_Store
+_site/
+# 生成物・キャッシュ（Actionsで再生成／Pagesで配信）
+index.html
+data/data_j.xls
+# バックアップ
+*.bak
+*.bak-*
+data/*.bak*
