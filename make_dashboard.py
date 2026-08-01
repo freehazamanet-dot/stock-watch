@@ -82,6 +82,61 @@ if has_track:
 else:
     track_section_html = ""
 
+# 要因分析（analysis.json）
+analysis_path = ROOT / "data" / "analysis.json"
+analysis = json.loads(analysis_path.read_text(encoding="utf-8")) if analysis_path.exists() else None
+if analysis:
+    conf = analysis.get("confidence", "")
+    conf_label = {"medium": "中", "low": "低", "very_low": "非常に低い"}.get(conf, conf)
+    ph = analysis.get("primary_horizon", {})
+    hz_rows = ""
+    for h in analysis.get("horizon_summary", []):
+        if h.get("n"):
+            hz_rows += (f'<tr><td>{h["horizon"]}</td><td class="num">{h["n"]}</td>'
+                        f'<td class="num">{h.get("win_rate_vs_mkt")}%</td>'
+                        f'<td class="num" style="color:{"var(--green)" if (h.get("avg_excess") or 0) > 0 else "var(--red)"};font-weight:700">{h.get("avg_excess"):+.2f}%</td>'
+                        f'<td class="num muted">{(h.get("avg_return") or 0):+.2f}%</td></tr>')
+        else:
+            hz_rows += (f'<tr><td>{h["horizon"]}</td>'
+                        f'<td class="num" colspan="4" style="text-align:center;color:var(--muted)">蓄積中（このホライズンに到達したシグナルがまだ無い）</td></tr>')
+    ic_rows = ""
+    for f in sorted(analysis.get("factor_ic", []), key=lambda x: -(x["signed_ic"] if x["signed_ic"] is not None else -9)):
+        s = f.get("signed_ic")
+        col = ("var(--muted)" if (not f.get("reliable") or s is None)
+               else "var(--green)" if s > 0.05 else "var(--red)" if s < -0.05 else "var(--ink)")
+        badge = "" if f.get("reliable") else ' <span class="muted" style="font-size:.7rem">(標本不足)</span>'
+        ic_rows += (f'<tr><td>{f["label"]}{badge}</td>'
+                    f'<td class="num" style="color:{col};font-weight:700">{("—" if s is None else f"{s:+.3f}")}</td>'
+                    f'<td class="num muted">{f.get("n")}</td></tr>')
+    findings_html = "".join(f"<li>{x}</li>" for x in analysis.get("findings", []))
+    caveats_html = "".join(f"<li>{x}</li>" for x in analysis.get("caveats", []))
+    analysis_section_html = f"""
+  <h2>📈 成績の推移・要因分析（精度向上のエンジン）</h2>
+  <p class="disclaimer">割安判定した銘柄が、判定日から <b>1ヶ月/3ヶ月/6ヶ月後</b> に日経平均をどれだけ上回ったか(超過リターン)を追跡。さらに<b>どの指標が実際にリターンを当てているか</b>を順位相関(signed IC=正で期待どおり効果あり)で計測。目標=<b>{analysis.get('target','')}</b>。主ホライズン=<b>{ph.get('label','')}</b>（標本n={ph.get('n')}・信頼度<b>{conf_label}</b>）。単一期間・小標本の暫定値で、蓄積で濃くなります。</p>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+    <div>
+      <p class="muted" style="margin:0 0 4px;">ホライズン別 成績（対日経・超過）</p>
+      <div class="card tablebox">
+        <table><thead><tr><th>期間</th><th class="num">銘柄数</th><th class="num">対市場勝率</th><th class="num">平均超過</th><th class="num">平均リターン</th></tr></thead><tbody>{hz_rows}</tbody></table>
+      </div>
+    </div>
+    <div>
+      <p class="muted" style="margin:0 0 4px;">どの指標が効いているか（signed IC / 主ホライズン）</p>
+      <div class="card tablebox">
+        <table><thead><tr><th>指標</th><th class="num">効き(signed IC)</th><th class="num">n</th></tr></thead><tbody>{ic_rows}</tbody></table>
+      </div>
+    </div>
+  </div>
+  <div class="card" style="margin-top:12px;">
+    <b style="color:var(--gold);font-size:.9rem;">改善候補（データドリブン・承認制）</b>
+    <ul class="meth" style="margin:6px 0 0;padding-left:1.2em;">{findings_html}</ul>
+    <b style="color:var(--muted);font-size:.8rem;display:block;margin-top:10px;">注意</b>
+    <ul class="meth" style="margin:4px 0 0;padding-left:1.2em;font-size:.74rem;">{caveats_html}</ul>
+  </div>
+"""
+else:
+    analysis_section_html = ""
+
 
 def chips(items, cls):
     if not items:
@@ -146,6 +201,7 @@ html = f"""<!DOCTYPE html>
     <div class="kpi"><div class="n" style="color:var(--red)">-{len(dropped)}</div><div class="l">アウト（前回比）</div></div>
   </div>
 {track_section_html}
+{analysis_section_html}
   {'''<h2>🏆 Sランク厳選（割安 × 決算の質）</h2>
   <p class="disclaimer">スナップショットの割安スコアに、複数年決算（連続黒字・営業利益率・営業CF・配当の持続性・ネットキャッシュ）を加味して再選別。<b>S+＝決算良好で割安・警告ゼロ</b>、S＝概ね良好（軽微な懸念1つまで）。「安いだけ」のバリュートラップを除外した最優先リストです。</p>
   <div class="card tablebox"><table id="t-splus"></table></div>

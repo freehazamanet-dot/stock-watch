@@ -42,7 +42,7 @@ for r in (splus or strict[:20]):
            if 'total' in r else f"score {r['score']} | ")
         + f"PBR {r['pbr']:.2f} | PER {r['per']:.1f} | 配当 {(r['yield'] or 0):.1f}%"
     )
-lines += ["", "ダッシュボード: ~/Documents/stock-watch/index.html",
+lines += ["", "ダッシュボード: https://freehazamanet-dot.github.io/stock-watch/",
           "※機械的スクリーニングであり投資助言ではありません。"]
 
 body = {

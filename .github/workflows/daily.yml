@@ -32,11 +32,12 @@ jobs:
       - name: Install deps
         run: pip install -r requirements.txt
 
-      - name: Run pipeline (screen → deep → tracker → dashboard)
+      - name: Run pipeline (screen → deep → tracker → analyze → dashboard)
         run: |
           python screener.py
           python deep_screener.py
           python tracker.py
+          python analyze_signals.py
           python make_dashboard.py
 
       - name: Email notify (scheduled runs only)
