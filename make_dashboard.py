@@ -172,8 +172,10 @@ if pf and pf.get("equity_curve"):
     for h in pf.get("holdings", []):
         r = h.get("return_pct")
         col = "var(--green)" if (r or 0) >= 0 else "var(--red)"
+        sh = h.get("shares")
+        sh_txt = f"{sh:,}株" if sh else "—"
         hold_rows += (f'<tr><td><a href="https://finance.yahoo.co.jp/quote/{h["code"]}.T" target="_blank">{h["code"]}</a></td>'
-                      f'<td>{h.get("name","")}</td><td class="num muted">{h.get("entry_date","")}</td>'
+                      f'<td>{h.get("name","")}</td><td class="num">{sh_txt}</td><td class="num muted">{h.get("entry_date","")}</td>'
                       f'<td class="num">¥{h.get("invested",0):,}</td><td class="num">¥{h.get("value",0):,}</td>'
                       f'<td class="num" style="color:{col};font-weight:700">{("—" if r is None else f"{r:+.1f}%")}</td></tr>')
     # --- この結果になった理由（内訳） ---
@@ -210,12 +212,12 @@ if pf and pf.get("equity_curve"):
     explain_html = f"""
   <h2>📖 この結果になった理由（内訳）</h2>
   <div class="card" style="padding:14px 16px;line-height:1.75;">
-    <b>ひとことで言うと：</b>{buy_day} に「割安 × 財務の質」で選んだ<b>10銘柄</b>へ約10万円ずつ（計¥{cap:,}）投資。
+    <b>ひとことで言うと：</b>{buy_day} に「割安 × 財務の質」で選んだ銘柄を<b>100株（1単元）単位</b>で、1銘柄あたり約10万円を目安に購入（計{pf.get('n_holdings')}銘柄・端数は現金）。
     日経平均が下がる相場でも、相対的に強い割安・好財務の銘柄を持ち続け、ルール通り月1回入れ替えた結果、
     <b>¥{cap:,} が ¥{final_v:,}（{pf.get('total_return_pct',0):+.2f}%）</b>になりました。
   </div>
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin:12px 0;">
-    <div class="card" style="padding:12px 14px;"><div style="font-size:1.05rem;">🛒 ①買う（{buy_day}）</div><div class="muted" style="font-size:.82rem;margin-top:4px;line-height:1.6;">割安スコアで「厳選（警告なし）」かつ ROE 8%以上を、質の高い順に10銘柄。1銘柄あたり約10万円ずつ均等に。</div></div>
+    <div class="card" style="padding:12px 14px;"><div style="font-size:1.05rem;">🛒 ①買う（{buy_day}）</div><div class="muted" style="font-size:.82rem;margin-top:4px;line-height:1.6;">割安スコアで「厳選（警告なし）」かつ ROE 8%以上を、質の高い順に。<b>100株単位</b>で1銘柄あたり約10万円を目安に購入し、100株で予算を超える高株価銘柄はスキップ。最大10銘柄、余りは現金。</div></div>
     <div class="card" style="padding:12px 14px;"><div style="font-size:1.05rem;">🔄 ②入れ替える（{rebal_txt}）</div><div class="muted" style="font-size:.82rem;margin-top:4px;line-height:1.6;">約1か月ごとに、上位ランクから外れた銘柄を売り、新しい上位銘柄へ乗せ替え。‑25%の暴落ストップと最長12か月ルールも常時作動。</div></div>
     <div class="card" style="padding:12px 14px;"><div style="font-size:1.05rem;">📊 ③今の状態</div><div class="muted" style="font-size:.82rem;margin-top:4px;line-height:1.6;">10銘柄を保有中（現金¥{pf.get('cash',0):,}）。市場は{('%+.2f%%'%pf.get('bench_return_pct')) if pf.get('bench_return_pct') is not None else '—'}下げたが、選んだ銘柄群は相対的に上回った。</div></div>
   </div>
@@ -236,7 +238,7 @@ if pf and pf.get("equity_curve"):
 
     portfolio_section_html = f"""
   <h2>💰 ¥{cap:,} ルール運用シミュレーション</h2>
-  <p class="disclaimer">ルール: {pf.get('rule','')}。{pf.get('start_date','')}起点で遡及＋以降フォワード、分割・配当調整済のトータルリターン基準。<b>ペーパー（仮想）運用で実発注はありません。投資助言でもありません。</b>単元未満は¥枠で簡略化。買い候補は履歴から再現可能な近似（厳選×ROE）。</p>
+  <p class="disclaimer">ルール: {pf.get('rule','')}。{pf.get('start_date','')}起点で遡及＋以降フォワード、購入金額は実株価・評価は分割配当調整済のトータルリターン基準。<b>ペーパー（仮想）運用で実発注はありません。投資助言でもありません。</b>日本株の原則どおり100株（1単元）単位で購入し、端数は現金で保有＝実際に発注できる形。買い候補は履歴から再現可能な近似（厳選×ROE）。</p>
   <div class="kpis">
     <div class="kpi"><div class="n {'green' if tr >= 0 else ''}">¥{pf.get('final_value',cap):,}</div><div class="l">現在の資産（開始¥{cap:,}）</div></div>
     <div class="kpi"><div class="n {'green' if tr >= 0 else ''}">{tr:+.2f}%</div><div class="l">トータルリターン</div></div>
@@ -246,8 +248,8 @@ if pf and pf.get("equity_curve"):
     <div class="kpi"><div class="n">{pf.get('n_holdings')}<span style="font-size:.9rem">銘柄</span></div><div class="l">現在の保有（現金¥{pf.get('cash',0):,}）</div></div>
   </div>
   <div class="card" style="padding:10px 14px;"><div style="display:flex;gap:14px;font-size:.72rem;color:var(--muted);margin-bottom:4px;"><span><span style="color:#3fb27f">━</span> ポートフォリオ</span><span><span style="color:#8b98a5">━</span> 日経(同額)</span><span>‑‑‑ 開始¥{cap:,}</span></div>{svg}</div>
-  <h2 style="font-size:.95rem;margin:16px 0 8px;">現在の保有（{pf.get('n_holdings')}銘柄）</h2>
-  <div class="card tablebox"><table><thead><tr><th>コード</th><th>社名</th><th class="num">購入日</th><th class="num">投資額</th><th class="num">評価額</th><th class="num">損益</th></tr></thead><tbody>{hold_rows}</tbody></table></div>
+  <h2 style="font-size:.95rem;margin:16px 0 8px;">現在の保有（{pf.get('n_holdings')}銘柄・すべて100株単位で購入）</h2>
+  <div class="card tablebox"><table><thead><tr><th>コード</th><th>社名</th><th class="num">株数</th><th class="num">購入日</th><th class="num">投資額</th><th class="num">評価額</th><th class="num">損益</th></tr></thead><tbody>{hold_rows}</tbody></table></div>
 {explain_html}
 """
 else:

@@ -2,18 +2,21 @@
 # -*- coding: utf-8 -*-
 """¥100万 ルール運用シミュレーション（ペーパーポートフォリオ）
 
-ルール v1（割安×質）:
+ルール v2（割安×質・100株単位で実際に買える版）:
 - 買い候補: 厳選(score>=strict_min & 警告フラグなし) かつ ROE>=8% を ROE降順（=質のティルト）
-- 保有: 10銘柄・ほぼ均等（1枠 = 総資産/10）
-- リバランス: 28日以上あけて（≒月次）、ランク外に落ちた保有を売り・新規上位で10枠に補充
+- 売買単位: 日本株の原則である単元株=100株の整数倍でのみ購入（実際に発注できる形）
+- 保有: 上位から、1銘柄の目安予算(=総資産/10≒10万円)に収まる単元数を購入。最大10銘柄。
+  100株で予算を超える高株価銘柄はスキップして次の候補へ。余った現金は上位保有へ単元追加、
+  それでも余れば現金で保有（=無理に10万円ちょうどにしない、実運用どおり）。
+- リバランス: 28日以上あけて（≒月次）、上位10から外れた保有を売り、上位で埋め直す
 - 売り: -25%で暴落ストップ（日次）、最長365日で入替、それ以外はリバランス主導
 - コスト: 売買ごとに0.1%（往復0.2%）控除
-- 起点: 最古スナップショット(6/13)から遡及シミュ＋以降フォワード。日次で時価評価
-- 価格: yfinance の分割・配当調整済（トータルリターン基準）
+- 起点: 最古スナップショット(6/13→最初の営業日6/15)から遡及シミュ＋以降フォワード。日次評価
+- 価格: 購入金額=実株価(Close)、評価=分割配当調整済(Adj Close)のトータルリターン基準
 - ベンチマーク: 同額を日経平均(^N225)に投じて日次評価
 
-注意: 単元(100株)未満の端数は簡略化し「¥枠」で保有（総リターンの推計としては十分）。
-S+/S深掘りランクは過去分が保存されていないため、履歴から再現可能な近似(厳選×ROE)を使用。
+注意: S+/S深掘りランクは過去分が保存されていないため、履歴から再現可能な近似(厳選×ROE)を使用。
+※単元未満株(S株等)を使えば10万円ちょうどの均等も可能だが、ここは標準の100株単位で検証。
 出力: data/portfolio.json
 """
 import json
@@ -93,11 +96,13 @@ def target_list(snap):
     return [c for c, _, _ in cands]
 
 
-def _dl_adjusted(codes, start_date):
+def _dl_prices(codes, start_date):
+    """各銘柄の [実株価Close, 調整株価AdjClose] を取得。
+    実株価=単元(100株)の購入金額計算用、調整株価=分割/配当込みの評価用。"""
     import yfinance as yf
     start = (datetime.date.fromisoformat(start_date) - datetime.timedelta(days=7)).isoformat()
     end = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
-    df = yf.download([f"{c}.T" for c in codes], start=start, end=end, auto_adjust=True,
+    df = yf.download([f"{c}.T" for c in codes], start=start, end=end, auto_adjust=False,
                      progress=False, threads=True, group_by="ticker")
     out = {}
     for c in codes:
@@ -105,8 +110,12 @@ def _dl_adjusted(codes, start_date):
         try:
             if t not in df.columns.get_level_values(0):
                 continue
-            s = {ts.date().isoformat(): float(row["Close"])
-                 for ts, row in df[t].iterrows() if row["Close"] == row["Close"]}
+            s = {}
+            for ts, row in df[t].iterrows():
+                raw = row.get("Close")
+                adj = row.get("Adj Close")
+                if raw == raw and adj == adj:   # NaN 除外
+                    s[ts.date().isoformat()] = [float(raw), float(adj)]
             if s:
                 out[c] = s
         except Exception:
@@ -114,10 +123,10 @@ def _dl_adjusted(codes, start_date):
     return out
 
 
-def fetch_adjusted(codes, start_date):
+def fetch_prices(codes, start_date):
     """取得成功→キャッシュ更新して返す。失敗→キャッシュから復元（レート制限耐性）。"""
     cache = _load_json(CACHE_PX)
-    live = _retry(lambda: _dl_adjusted(codes, start_date))
+    live = _retry(lambda: _dl_prices(codes, start_date))
     if live:
         cache.update(live)   # 銘柄単位でフルシリーズを差し替え
         CACHE_PX.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
@@ -146,7 +155,7 @@ def nikkei_series(start_date):
 
 
 def px(series, date_str):
-    """その日以前で最も近い価格（キャリーフォワード）"""
+    """その日以前で最も近い値（キャリーフォワード）。日経など単一値シリーズ用。"""
     if not series:
         return None
     if date_str in series:
@@ -157,6 +166,24 @@ def px(series, date_str):
         if d in series:
             return series[d]
     return None
+
+
+def _pair(series, date_str):
+    """[実株価, 調整株価] をキャリーフォワードで返す。旧形式(単一float)にも耐性。"""
+    v = px(series, date_str)
+    if v is None:
+        return None, None
+    if isinstance(v, (list, tuple)):
+        return v[0], v[1]
+    return None, v   # 旧キャッシュ（調整のみ）: 実株価不明→単元購入不可、評価は可能
+
+
+def raw_px(series, date_str):
+    return _pair(series, date_str)[0]
+
+
+def adj_px(series, date_str):
+    return _pair(series, date_str)[1]
 
 
 def main():
@@ -179,10 +206,10 @@ def main():
         for c, r in s["bycode"].items():
             name_of[c] = r.get("name")
 
-    # 保有しうる全銘柄の価格を取得
-    universe = sorted({c for _, tl in rebal_targets for c in tl[:N_HOLD * 3]})
+    # 保有しうる全銘柄の価格を取得（高株価はスキップされるので候補は広めに）
+    universe = sorted({c for _, tl in rebal_targets for c in tl[:N_HOLD * 6]})
     print(f"  価格取得: {len(universe)}銘柄...")
-    adj = fetch_adjusted(universe, start_date)
+    px_data = fetch_prices(universe, start_date)
     nk = nikkei_series(start_date)
 
     # 取引カレンダー = 日経の営業日（起点以降）
@@ -202,72 +229,115 @@ def main():
             rebal_by_date[tday] = targets
 
     cash = START_CAPITAL
-    holds = {}   # code -> {name, entry_date, entry_px, invested}
+    holds = {}   # code -> {name, first_date, lots:[{shares, entry_raw, entry_adj, invested, date}]}
     trades = []
     equity_curve = []
     rebal_dates = set(rebal_by_date)
+    UNIT = 100    # 単元株数（日本株は原則100株単位）
 
-    def hold_value(c, d):
-        p = px(adj.get(c), d)
-        if p is None or holds[c]["entry_px"] in (None, 0):
-            return holds[c]["invested"]
-        return holds[c]["invested"] * (p / holds[c]["entry_px"])
+    def pos_shares(c):
+        return sum(l["shares"] for l in holds[c]["lots"])
+
+    def pos_invested(c):
+        return sum(l["invested"] for l in holds[c]["lots"])
+
+    def pos_value(c, d):
+        pa = adj_px(px_data.get(c), d)
+        if pa is None:
+            return pos_invested(c)
+        return sum(l["invested"] * (pa / l["entry_adj"]) for l in holds[c]["lots"] if l["entry_adj"])
 
     def total_equity(d):
-        return cash + sum(hold_value(c, d) for c in holds)
+        return cash + sum(pos_value(c, d) for c in holds)
 
     def sell(c, d, reason):
         nonlocal cash
-        val = hold_value(c, d)
+        val = pos_value(c, d)
+        inv = pos_invested(c)
         cash += val * (1 - FEE)
-        ret = None
-        p = px(adj.get(c), d)
-        if p and holds[c]["entry_px"]:
-            ret = round((p / holds[c]["entry_px"] - 1) * 100, 1)
+        ret = round((val / inv - 1) * 100, 1) if inv else None
         trades.append({"date": d, "action": "SELL", "code": c, "name": holds[c]["name"],
-                       "amount": round(val), "cost": round(holds[c]["invested"]),
-                       "pl": round(val - holds[c]["invested"]), "return_pct": ret, "reason": reason})
+                       "shares": pos_shares(c), "amount": round(val), "cost": round(inv),
+                       "pl": round(val - inv), "return_pct": ret, "reason": reason})
         del holds[c]
 
-    def buy(c, d, amount):
+    def buy(c, d, lots):
+        """100株×lots単元を購入。実株価で約定・評価は調整株価で追跡。成功でTrue。"""
         nonlocal cash
-        p = px(adj.get(c), d)
-        if p is None or amount <= 0 or cash < amount:
-            return
-        cash -= amount
-        cash -= amount * FEE
-        holds[c] = {"name": name_of.get(c), "entry_date": d, "entry_px": p, "invested": amount}
-        trades.append({"date": d, "action": "BUY", "code": c, "name": name_of.get(c), "amount": round(amount)})
+        pr = raw_px(px_data.get(c), d)
+        pa = adj_px(px_data.get(c), d)
+        if pr is None or pa is None or lots < 1:
+            return False
+        shares = lots * UNIT
+        cost = shares * pr
+        if cost * (1 + FEE) > cash + 1e-6:
+            return False
+        cash -= cost * (1 + FEE)
+        h = holds.get(c)
+        if h is None:
+            h = holds[c] = {"name": name_of.get(c), "first_date": d, "lots": []}
+        h["lots"].append({"shares": shares, "entry_raw": pr, "entry_adj": pa,
+                          "invested": cost, "date": d})
+        trades.append({"date": d, "action": "BUY", "code": c, "name": name_of.get(c),
+                       "shares": shares, "price": round(pr, 1), "amount": round(cost)})
+        return True
+
+    def do_rebalance(d, targets):
+        # ランク外（上位N_HOLDから外れた保有）を売却
+        tset = set(targets[:N_HOLD])
+        for c in list(holds):
+            if c not in tset:
+                sell(c, d, "ランク外")
+        equity = total_equity(d)
+        slot = equity / N_HOLD          # 1銘柄の目安予算（≒10万円）
+        cap = slot * 1.5                # 1銘柄の上限（100株の端数で少し超えるのは許容）
+        # パス1: 目標銘柄を上位から、目安予算に収まる単元数だけ新規購入
+        for c in targets:
+            if len(holds) >= N_HOLD:
+                break
+            if c in holds:
+                continue
+            pr = raw_px(px_data.get(c), d)
+            if pr is None:
+                continue
+            lotcost = pr * UNIT
+            if lotcost > cap:
+                continue               # 100株で予算超過（株価が高い）→スキップして次の候補へ
+            want = max(1, int(slot // lotcost))
+            while want >= 1 and want * lotcost * (1 + FEE) > cash:
+                want -= 1
+            if want >= 1:
+                buy(c, d, want)
+        # パス2: 余った現金を上位保有へ単元追加（上限capまで）し均等に近づける
+        progress = True
+        while progress:
+            progress = False
+            for c in targets:
+                if c not in holds:
+                    continue
+                pr = raw_px(px_data.get(c), d)
+                if pr is None:
+                    continue
+                lotcost = pr * UNIT
+                if pos_value(c, d) + lotcost <= cap and lotcost * (1 + FEE) <= cash:
+                    if buy(c, d, 1):
+                        progress = True
 
     for d in cal:
         # 日次: 暴落ストップ & 最長保有
         for c in list(holds):
-            p = px(adj.get(c), d)
-            ep = holds[c]["entry_px"]
-            if p and ep:
-                if p / ep - 1 <= DISASTER:
-                    sell(c, d, "暴落ストップ-25%")
-                    continue
-            held_days = (datetime.date.fromisoformat(d) - datetime.date.fromisoformat(holds[c]["entry_date"])).days
+            inv = pos_invested(c)
+            val = pos_value(c, d)
+            if inv and val / inv - 1 <= DISASTER:
+                sell(c, d, "暴落ストップ-25%")
+                continue
+            held_days = (datetime.date.fromisoformat(d) - datetime.date.fromisoformat(holds[c]["first_date"])).days
             if held_days > MAX_HOLD_DAYS:
                 sell(c, d, "最長保有12ヶ月")
 
         # リバランス日: 入替
         if d in rebal_dates:
-            targets = rebal_by_date[d]
-            tset = set(targets[:N_HOLD])
-            for c in list(holds):
-                if c not in tset:
-                    sell(c, d, "ランク外")
-            per = total_equity(d) / N_HOLD
-            for c in targets:
-                if len(holds) >= N_HOLD:
-                    break
-                if c in holds:
-                    continue
-                amt = min(per, cash / (1 + FEE))
-                if amt >= per * 0.5 and px(adj.get(c), d) is not None:
-                    buy(c, d, amt)
+            do_rebalance(d, rebal_by_date[d])
 
         eq = round(total_equity(d))
         nkp = px(nk, d)
@@ -277,11 +347,12 @@ def main():
     latest = cal[-1]
     cur_holdings = []
     for c, h in holds.items():
-        p = px(adj.get(c), latest)
-        val = hold_value(c, latest)
-        ret = round((p / h["entry_px"] - 1) * 100, 1) if (p and h["entry_px"]) else None
-        cur_holdings.append({"code": c, "name": h["name"], "entry_date": h["entry_date"],
-                             "invested": round(h["invested"]), "value": round(val), "return_pct": ret})
+        inv = pos_invested(c)
+        val = pos_value(c, latest)
+        ret = round((val / inv - 1) * 100, 1) if inv else None
+        cur_holdings.append({"code": c, "name": h["name"], "entry_date": h["first_date"],
+                             "shares": pos_shares(c), "invested": round(inv),
+                             "value": round(val), "return_pct": ret})
     cur_holdings.sort(key=lambda x: -(x["return_pct"] or -999))
 
     # 損益の内訳（分かりやすい説明用）
@@ -302,7 +373,8 @@ def main():
 
     out = {
         "generated_at": datetime.datetime.now().isoformat(timespec="seconds"),
-        "rule": "割安×質 v1 / 10銘柄均等 / 月次リバランス / -25%ストップ・最長12ヶ月 / 往復0.2%",
+        "rule": "割安×質 v1 / 100株単位で最大10銘柄・約10万円ずつ / 月次リバランス / -25%ストップ・最長12ヶ月 / 往復0.2%",
+        "unit": UNIT,
         "start_date": cal[0], "as_of": latest, "start_capital": START_CAPITAL,
         "final_value": final, "total_return_pct": total_ret,
         "bench_final": bench_final, "bench_return_pct": bench_ret,
@@ -313,7 +385,7 @@ def main():
         "realized_pl": round(realized_pl), "unrealized_pl": round(unrealized_pl),
         "rebalance_dates": sorted(rebal_by_date),
         "holdings": cur_holdings,
-        "sold": [{"code": t["code"], "name": t["name"], "date": t["date"],
+        "sold": [{"code": t["code"], "name": t["name"], "date": t["date"], "shares": t.get("shares"),
                   "pl": t.get("pl"), "return_pct": t.get("return_pct"), "reason": t.get("reason")}
                  for t in sold],
         "equity_curve": equity_curve,
