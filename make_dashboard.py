@@ -236,9 +236,37 @@ if pf and pf.get("equity_curve"):
   {sold_block}
 """
 
+    # --- 🤖 本日のアクション（bot） ---
+    acts = pf.get("today_actions", [])
+    if acts:
+        arows = ""
+        for t in acts:
+            if t.get("action") == "BUY":
+                arows += (f'<li style="color:var(--green);"><b>🟢 買い</b>：{t.get("name","")}（{t["code"]}）を <b>{t.get("shares","?"):,}株</b>'
+                          f'（約¥{t.get("amount",0):,}）</li>')
+            else:
+                rp = t.get("return_pct")
+                arows += (f'<li style="color:var(--red);"><b>🔴 売り</b>：{t.get("name","")}（{t["code"]}）を <b>{t.get("shares","?"):,}株</b>'
+                          f'（{"" if rp is None else f"{rp:+.1f}% ・"}{t.get("reason","")}）</li>')
+        action_body = f'<div style="font-weight:700;margin-bottom:6px;">本日の推奨アクション（{len(acts)}件）</div><ul style="margin:0;padding-left:1.2em;line-height:1.9;">{arows}</ul>'
+        action_border = "var(--gold)"
+    else:
+        action_body = '<div style="font-weight:700;">✅ 本日のアクションなし（保有を継続）</div>'
+        action_border = "var(--line)"
+    action_html = f"""
+  <div class="card" style="padding:12px 16px;border-left:4px solid {action_border};">
+    {action_body}
+    <div class="muted" style="font-size:.78rem;margin-top:8px;line-height:1.6;">
+      次回リバランスの目安：<b>{pf.get('next_rebalance_est','—')}</b>（月1回）／ 適用ルール：{pf.get('rule_version','—')}<br>
+      ※これは仮想（ペーパー）運用の推奨です。発注はご自身で行ってください（自動発注はしません）。投資助言ではありません。
+    </div>
+  </div>
+"""
+
     portfolio_section_html = f"""
   <h2>💰 ¥{cap:,} ルール運用シミュレーション</h2>
   <p class="disclaimer">ルール: {pf.get('rule','')}。{pf.get('start_date','')}起点で遡及＋以降フォワード、購入金額は実株価・評価は分割配当調整済のトータルリターン基準。<b>ペーパー（仮想）運用で実発注はありません。投資助言でもありません。</b>日本株の原則どおり100株（1単元）単位で購入し、端数は現金で保有＝実際に発注できる形。買い候補は履歴から再現可能な近似（厳選×ROE）。</p>
+{action_html}
   <div class="kpis">
     <div class="kpi"><div class="n {'green' if tr >= 0 else ''}">¥{pf.get('final_value',cap):,}</div><div class="l">現在の資産（開始¥{cap:,}）</div></div>
     <div class="kpi"><div class="n {'green' if tr >= 0 else ''}">{tr:+.2f}%</div><div class="l">トータルリターン</div></div>

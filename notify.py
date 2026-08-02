@@ -42,11 +42,32 @@ for r in (splus or strict[:20]):
            if 'total' in r else f"score {r['score']} | ")
         + f"PBR {r['pbr']:.2f} | PER {r['per']:.1f} | 配当 {(r['yield'] or 0):.1f}%"
     )
+# 🤖 ¥100万ルール運用bot の本日アクション
+pf_path = ROOT / "data" / "portfolio.json"
+bot_action = False
+if pf_path.exists():
+    pf = json.loads(pf_path.read_text(encoding="utf-8"))
+    acts = pf.get("today_actions", [])
+    bot_action = bool(acts)
+    lines += ["", f"■🤖 ¥100万ルール運用bot（{pf.get('rule_version','')}）",
+              f"資産 ¥{pf.get('final_value',0):,}（{pf.get('total_return_pct',0):+.2f}% ／ 日経比 {pf.get('excess_pct','?')}%）"]
+    if acts:
+        lines.append(f"★本日の推奨アクション {len(acts)}件（発注はご自身で）:")
+        for t in acts:
+            if t.get("action") == "BUY":
+                lines.append(f"  🟢買い {t.get('name','')}({t['code']}) {t.get('shares','?')}株 約¥{t.get('amount',0):,}")
+            else:
+                rp = t.get("return_pct")
+                lines.append(f"  🔴売り {t.get('name','')}({t['code']}) {t.get('shares','?')}株 "
+                             f"({'' if rp is None else f'{rp:+.1f}% ・'}{t.get('reason','')})")
+    else:
+        lines.append(f"本日のアクションなし（保有継続）。次回リバランス目安 {pf.get('next_rebalance_est','—')}")
+
 lines += ["", "ダッシュボード: https://freehazamanet-dot.github.io/stock-watch/",
-          "※機械的スクリーニングであり投資助言ではありません。"]
+          "※機械的スクリーニング／仮想運用であり投資助言ではありません。自動発注はしません。"]
 
 body = {
-    "_demo": f"株式割安監視 {data['date']}",
+    "_demo": f"株式割安監視 {data['date']}" + ("（🤖botアクションあり）" if bot_action else ""),
     "お名前": TO_NAME,
     "メールアドレス": TO_MAIL,
     "サマリー": "\n".join(lines),

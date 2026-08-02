@@ -35,6 +35,13 @@ MAX_HOLD_DAYS = 365
 REBAL_MIN_DAYS = 28
 ROE_FLOOR = 8.0
 
+# ルールのバージョン（前向き適用の原則）:
+# 改良するときは、この上のパラメータ（過去に適用済みの値）を書き換えず、
+# 新ルールは「今日以降」だけに適用する。過去の成績を後から良く見せる=過剰最適化を
+# 構造的に防ぐため。変更は月次レビューが根拠付きで提案し、承認を得てから反映する。
+# 詳細な改良ポリシーは RULES.md を参照。
+RULE_VERSION = "v2 (2026-06-13〜 / 100株単位・割安×質)"
+
 # クラウド(GitHub Actions)ではscreener.pyの後にYahooがレート制限をかけるため、
 # 取得成功時に価格をキャッシュへ保存し、失敗時はキャッシュから復元してシミュを継続する。
 CACHE_PX = ROOT / "data" / "px_cache.json"     # {code: {date: adj_close}}
@@ -355,6 +362,12 @@ def main():
                              "value": round(val), "return_pct": ret})
     cur_holdings.sort(key=lambda x: -(x["return_pct"] or -999))
 
+    # 本日のアクション（bot出力）＝最終営業日に発生した売買。通常は空＝保有継続。
+    today_actions = [t for t in trades if t["date"] == latest]
+    # 次回リバランスの目安（最後のリバランス営業日 + 最短間隔）
+    last_rebal = max(rebal_by_date) if rebal_by_date else start_date
+    next_rebal_est = (datetime.date.fromisoformat(last_rebal) + datetime.timedelta(days=REBAL_MIN_DAYS)).isoformat()
+
     # 損益の内訳（分かりやすい説明用）
     sold = [t for t in trades if t["action"] == "SELL"]
     realized_pl = sum(t.get("pl", 0) for t in sold)                      # 入替で確定した損益
@@ -375,6 +388,8 @@ def main():
         "generated_at": datetime.datetime.now().isoformat(timespec="seconds"),
         "rule": "割安×質 v1 / 100株単位で最大10銘柄・約10万円ずつ / 月次リバランス / -25%ストップ・最長12ヶ月 / 往復0.2%",
         "unit": UNIT,
+        "rule_version": RULE_VERSION,
+        "today_actions": today_actions, "next_rebalance_est": next_rebal_est,
         "start_date": cal[0], "as_of": latest, "start_capital": START_CAPITAL,
         "final_value": final, "total_return_pct": total_ret,
         "bench_final": bench_final, "bench_return_pct": bench_ret,
