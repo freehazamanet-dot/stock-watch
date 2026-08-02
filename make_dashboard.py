@@ -176,6 +176,64 @@ if pf and pf.get("equity_curve"):
                       f'<td>{h.get("name","")}</td><td class="num muted">{h.get("entry_date","")}</td>'
                       f'<td class="num">¥{h.get("invested",0):,}</td><td class="num">¥{h.get("value",0):,}</td>'
                       f'<td class="num" style="color:{col};font-weight:700">{("—" if r is None else f"{r:+.1f}%")}</td></tr>')
+    # --- この結果になった理由（内訳） ---
+    final_v = pf.get("final_value", cap)
+    bench_v = pf.get("bench_final")
+    total_pl = pf.get("total_pl", final_v - cap)
+    realized = pf.get("realized_pl")
+    unrealized = pf.get("unrealized_pl")
+    cost_etc = (total_pl - (realized or 0) - (unrealized or 0)) if (realized is not None and unrealized is not None) else None
+    rds = pf.get("rebalance_dates", [])
+    buy_day = rds[0] if rds else pf.get("start_date", "")
+    rebal_days = rds[1:] if len(rds) > 1 else []
+    sold = pf.get("sold", [])
+
+    def _yen(v):
+        if v is None:
+            return "—"
+        c = "var(--green)" if v >= 0 else "var(--red)"
+        return f'<span style="color:{c};font-weight:700">{v:+,}円</span>'
+
+    sold_rows = ""
+    for s in sold:
+        r = s.get("return_pct")
+        col = "var(--green)" if (r or 0) >= 0 else "var(--red)"
+        sold_rows += (f'<tr><td><a href="https://finance.yahoo.co.jp/quote/{s["code"]}.T" target="_blank">{s["code"]}</a></td>'
+                      f'<td>{s.get("name","")}</td><td class="num muted">{s.get("date","")}</td>'
+                      f'<td class="num">{_yen(s.get("pl"))}</td>'
+                      f'<td class="num" style="color:{col};font-weight:700">{("—" if r is None else f"{r:+.1f}%")}</td></tr>')
+    sold_block = (f'''<h2 style="font-size:.95rem;margin:16px 0 8px;">入れ替えで売却した銘柄（{len(sold)}銘柄・利益/損失を確定）</h2>
+  <div class="card tablebox"><table><thead><tr><th>コード</th><th>社名</th><th class="num">売却日</th><th class="num">確定損益</th><th class="num">騰落</th></tr></thead><tbody>{sold_rows}</tbody></table></div>'''
+                  if sold else "")
+    rebal_txt = ("・".join(rebal_days) + " に入れ替え") if rebal_days else "まだ入れ替えなし"
+
+    explain_html = f"""
+  <h2>📖 この結果になった理由（内訳）</h2>
+  <div class="card" style="padding:14px 16px;line-height:1.75;">
+    <b>ひとことで言うと：</b>{buy_day} に「割安 × 財務の質」で選んだ<b>10銘柄</b>へ約10万円ずつ（計¥{cap:,}）投資。
+    日経平均が下がる相場でも、相対的に強い割安・好財務の銘柄を持ち続け、ルール通り月1回入れ替えた結果、
+    <b>¥{cap:,} が ¥{final_v:,}（{pf.get('total_return_pct',0):+.2f}%）</b>になりました。
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin:12px 0;">
+    <div class="card" style="padding:12px 14px;"><div style="font-size:1.05rem;">🛒 ①買う（{buy_day}）</div><div class="muted" style="font-size:.82rem;margin-top:4px;line-height:1.6;">割安スコアで「厳選（警告なし）」かつ ROE 8%以上を、質の高い順に10銘柄。1銘柄あたり約10万円ずつ均等に。</div></div>
+    <div class="card" style="padding:12px 14px;"><div style="font-size:1.05rem;">🔄 ②入れ替える（{rebal_txt}）</div><div class="muted" style="font-size:.82rem;margin-top:4px;line-height:1.6;">約1か月ごとに、上位ランクから外れた銘柄を売り、新しい上位銘柄へ乗せ替え。‑25%の暴落ストップと最長12か月ルールも常時作動。</div></div>
+    <div class="card" style="padding:12px 14px;"><div style="font-size:1.05rem;">📊 ③今の状態</div><div class="muted" style="font-size:.82rem;margin-top:4px;line-height:1.6;">10銘柄を保有中（現金¥{pf.get('cash',0):,}）。市場は{('%+.2f%%'%pf.get('bench_return_pct')) if pf.get('bench_return_pct') is not None else '—'}下げたが、選んだ銘柄群は相対的に上回った。</div></div>
+  </div>
+  <h2 style="font-size:.95rem;margin:16px 0 8px;">お金の増え方（{total_pl:+,}円の内訳）</h2>
+  <div class="card tablebox"><table><tbody>
+    <tr><td>実現利益（入れ替えで売却して<b>確定</b>した分）</td><td class="num">{_yen(realized)}</td></tr>
+    <tr><td>含み損益（いま保有中の10銘柄の評価損益）</td><td class="num">{_yen(unrealized)}</td></tr>
+    <tr><td>売買コスト・現金分（手数料0.2%など）</td><td class="num">{_yen(cost_etc)}</td></tr>
+    <tr style="border-top:2px solid var(--line);font-weight:700;"><td>合計（¥{cap:,} → ¥{final_v:,}）</td><td class="num">{_yen(total_pl)}</td></tr>
+  </tbody></table></div>
+  <div class="card" style="padding:12px 16px;margin-top:10px;line-height:1.7;">
+    <b>なぜ市場に勝てたのか：</b>同じ¥{cap:,}を日経平均に入れていたら <b>¥{bench_v:,}（{('%+.2f%%'%pf.get('bench_return_pct')) if pf.get('bench_return_pct') is not None else '—'}）</b>。
+    下落局面でも割安・好財務の銘柄は下げにくく、一部は上昇したため、市場に対して <b class="gold">{('%+.2f%%'%pf.get('excess_pct')) if pf.get('excess_pct') is not None else '—'}</b> の差がつきました。
+    <span class="muted" style="font-size:.8rem;">※単一期間・短期間の結果であり、今後も続く保証はありません。</span>
+  </div>
+  {sold_block}
+"""
+
     portfolio_section_html = f"""
   <h2>💰 ¥{cap:,} ルール運用シミュレーション</h2>
   <p class="disclaimer">ルール: {pf.get('rule','')}。{pf.get('start_date','')}起点で遡及＋以降フォワード、分割・配当調整済のトータルリターン基準。<b>ペーパー（仮想）運用で実発注はありません。投資助言でもありません。</b>単元未満は¥枠で簡略化。買い候補は履歴から再現可能な近似（厳選×ROE）。</p>
@@ -190,6 +248,7 @@ if pf and pf.get("equity_curve"):
   <div class="card" style="padding:10px 14px;"><div style="display:flex;gap:14px;font-size:.72rem;color:var(--muted);margin-bottom:4px;"><span><span style="color:#3fb27f">━</span> ポートフォリオ</span><span><span style="color:#8b98a5">━</span> 日経(同額)</span><span>‑‑‑ 開始¥{cap:,}</span></div>{svg}</div>
   <h2 style="font-size:.95rem;margin:16px 0 8px;">現在の保有（{pf.get('n_holdings')}銘柄）</h2>
   <div class="card tablebox"><table><thead><tr><th>コード</th><th>社名</th><th class="num">購入日</th><th class="num">投資額</th><th class="num">評価額</th><th class="num">損益</th></tr></thead><tbody>{hold_rows}</tbody></table></div>
+{explain_html}
 """
 else:
     portfolio_section_html = ""

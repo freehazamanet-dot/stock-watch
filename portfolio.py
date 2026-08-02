@@ -173,14 +173,14 @@ def main():
         if last is None or (datetime.date.fromisoformat(s["date"]) - datetime.date.fromisoformat(last)).days >= REBAL_MIN_DAYS:
             rebal.append(s)
             last = s["date"]
-    rebal_by_date = {s["date"]: target_list(s) for s in rebal}
+    rebal_targets = [(s["date"], target_list(s)) for s in rebal]
     name_of = {}
     for s in snaps:
         for c, r in s["bycode"].items():
             name_of[c] = r.get("name")
 
     # 保有しうる全銘柄の価格を取得
-    universe = sorted({c for tl in rebal_by_date.values() for c in tl[:N_HOLD * 3]})
+    universe = sorted({c for _, tl in rebal_targets for c in tl[:N_HOLD * 3]})
     print(f"  価格取得: {len(universe)}銘柄...")
     adj = fetch_adjusted(universe, start_date)
     nk = nikkei_series(start_date)
@@ -191,6 +191,15 @@ def main():
         print("カレンダー取得失敗")
         return
     nk_start = px(nk, cal[0])
+
+    # スナップショット日を「その日以降で最初の営業日」に対応づけてリバランスを発火。
+    # （例: 6/13は土曜=非営業日→6/15で発火。これがないと初回買付が丸ごと欠落し、
+    #   最初のリバランスまで全額現金のままになってしまう）
+    rebal_by_date = {}
+    for snap_date, targets in rebal_targets:
+        tday = next((d for d in cal if d >= snap_date), None)
+        if tday:
+            rebal_by_date[tday] = targets
 
     cash = START_CAPITAL
     holds = {}   # code -> {name, entry_date, entry_px, invested}
@@ -216,7 +225,8 @@ def main():
         if p and holds[c]["entry_px"]:
             ret = round((p / holds[c]["entry_px"] - 1) * 100, 1)
         trades.append({"date": d, "action": "SELL", "code": c, "name": holds[c]["name"],
-                       "amount": round(val), "return_pct": ret, "reason": reason})
+                       "amount": round(val), "cost": round(holds[c]["invested"]),
+                       "pl": round(val - holds[c]["invested"]), "return_pct": ret, "reason": reason})
         del holds[c]
 
     def buy(c, d, amount):
@@ -274,6 +284,11 @@ def main():
                              "invested": round(h["invested"]), "value": round(val), "return_pct": ret})
     cur_holdings.sort(key=lambda x: -(x["return_pct"] or -999))
 
+    # 損益の内訳（分かりやすい説明用）
+    sold = [t for t in trades if t["action"] == "SELL"]
+    realized_pl = sum(t.get("pl", 0) for t in sold)                      # 入替で確定した損益
+    unrealized_pl = sum(h["value"] - h["invested"] for h in cur_holdings)  # 保有中の含み損益
+
     final = equity_curve[-1]["value"] if equity_curve else START_CAPITAL
     bench_final = equity_curve[-1]["bench"] if equity_curve else START_CAPITAL
     total_ret = round((final / START_CAPITAL - 1) * 100, 2)
@@ -294,8 +309,13 @@ def main():
         "excess_pct": round(total_ret - bench_ret, 2) if bench_ret is not None else None,
         "max_drawdown_pct": round(mdd * 100, 1),
         "cash": round(cash), "n_holdings": len(holds),
-        "rebalance_dates": list(rebal_by_date),
+        "total_pl": round(final - START_CAPITAL),
+        "realized_pl": round(realized_pl), "unrealized_pl": round(unrealized_pl),
+        "rebalance_dates": sorted(rebal_by_date),
         "holdings": cur_holdings,
+        "sold": [{"code": t["code"], "name": t["name"], "date": t["date"],
+                  "pl": t.get("pl"), "return_pct": t.get("return_pct"), "reason": t.get("reason")}
+                 for t in sold],
         "equity_curve": equity_curve,
         "trades": trades[-60:],
         "n_trades": len(trades),
