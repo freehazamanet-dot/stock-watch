@@ -19,6 +19,7 @@ S+/S深掘りランクは過去分が保存されていないため、履歴か�
 import json
 import glob
 import os
+import time
 import datetime
 from pathlib import Path
 
@@ -30,6 +31,32 @@ DISASTER = -0.25     # 暴落ストップ
 MAX_HOLD_DAYS = 365
 REBAL_MIN_DAYS = 28
 ROE_FLOOR = 8.0
+
+# クラウド(GitHub Actions)ではscreener.pyの後にYahooがレート制限をかけるため、
+# 取得成功時に価格をキャッシュへ保存し、失敗時はキャッシュから復元してシミュを継続する。
+CACHE_PX = ROOT / "data" / "px_cache.json"     # {code: {date: adj_close}}
+CACHE_NK = ROOT / "data" / "nikkei.json"        # {date: adj_close}
+
+
+def _load_json(p):
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _retry(fn, tries=3, base=8):
+    """空でない結果が返るまでリトライ（レート制限のバックオフ）。全滅なら None。"""
+    for i in range(tries):
+        try:
+            r = fn()
+            if r:
+                return r
+        except Exception as e:
+            print(f"  [warn] 取得試行{i+1}失敗: {e}")
+        if i < tries - 1:
+            time.sleep(base * (i + 1))
+    return None
 
 
 def load_snapshots():
@@ -66,41 +93,56 @@ def target_list(snap):
     return [c for c, _, _ in cands]
 
 
-def fetch_adjusted(codes, start_date):
-    try:
-        import yfinance as yf
-        start = (datetime.date.fromisoformat(start_date) - datetime.timedelta(days=7)).isoformat()
-        end = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
-        df = yf.download([f"{c}.T" for c in codes], start=start, end=end, auto_adjust=True,
-                         progress=False, threads=True, group_by="ticker")
-        out = {}
-        for c in codes:
-            t = f"{c}.T"
-            try:
-                if t not in df.columns.get_level_values(0):
-                    continue
-                s = {ts.date().isoformat(): float(row["Close"])
-                     for ts, row in df[t].iterrows() if row["Close"] == row["Close"]}
-                if s:
-                    out[c] = s
-            except Exception:
+def _dl_adjusted(codes, start_date):
+    import yfinance as yf
+    start = (datetime.date.fromisoformat(start_date) - datetime.timedelta(days=7)).isoformat()
+    end = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
+    df = yf.download([f"{c}.T" for c in codes], start=start, end=end, auto_adjust=True,
+                     progress=False, threads=True, group_by="ticker")
+    out = {}
+    for c in codes:
+        t = f"{c}.T"
+        try:
+            if t not in df.columns.get_level_values(0):
                 continue
-        return out
-    except Exception as e:
-        print(f"  [warn] 価格取得失敗: {e}")
-        return {}
+            s = {ts.date().isoformat(): float(row["Close"])
+                 for ts, row in df[t].iterrows() if row["Close"] == row["Close"]}
+            if s:
+                out[c] = s
+        except Exception:
+            continue
+    return out
+
+
+def fetch_adjusted(codes, start_date):
+    """取得成功→キャッシュ更新して返す。失敗→キャッシュから復元（レート制限耐性）。"""
+    cache = _load_json(CACHE_PX)
+    live = _retry(lambda: _dl_adjusted(codes, start_date))
+    if live:
+        cache.update(live)   # 銘柄単位でフルシリーズを差し替え
+        CACHE_PX.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+    else:
+        print(f"  [warn] 価格はライブ取得できずキャッシュ({len(cache)}銘柄)を使用")
+    return {c: cache[c] for c in codes if c in cache}
+
+
+def _dl_nikkei(start_date):
+    import yfinance as yf
+    start = (datetime.date.fromisoformat(start_date) - datetime.timedelta(days=7)).isoformat()
+    end = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
+    h = yf.Ticker("^N225").history(start=start, end=end, auto_adjust=True)
+    return {ts.date().isoformat(): float(r["Close"]) for ts, r in h.iterrows()}
 
 
 def nikkei_series(start_date):
-    try:
-        import yfinance as yf
-        start = (datetime.date.fromisoformat(start_date) - datetime.timedelta(days=7)).isoformat()
-        end = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
-        h = yf.Ticker("^N225").history(start=start, end=end, auto_adjust=True)
-        return {ts.date().isoformat(): float(r["Close"]) for ts, r in h.iterrows()}
-    except Exception as e:
-        print(f"  [warn] 日経取得失敗: {e}")
-        return {}
+    live = _retry(lambda: _dl_nikkei(start_date))
+    if live:
+        CACHE_NK.write_text(json.dumps(live, ensure_ascii=False), encoding="utf-8")
+        return live
+    cache = _load_json(CACHE_NK)
+    if cache:
+        print(f"  [warn] 日経はライブ取得できずキャッシュ({len(cache)}日)を使用")
+    return cache
 
 
 def px(series, date_str):
