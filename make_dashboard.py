@@ -137,6 +137,63 @@ if analysis:
 else:
     analysis_section_html = ""
 
+# ¥100万 ルール運用シミュレーション（portfolio.json）
+pf_path = ROOT / "data" / "portfolio.json"
+pf = json.loads(pf_path.read_text(encoding="utf-8")) if pf_path.exists() else None
+if pf and pf.get("equity_curve"):
+    ec = pf["equity_curve"]
+    cap = pf.get("start_capital", 1_000_000)
+    vals = [e["value"] for e in ec] + [e["bench"] for e in ec if e.get("bench")] + [cap]
+    lo, hi = min(vals), max(vals)
+    rng = (hi - lo) or 1
+    W, H, pad = 760, 200, 10
+    n = len(ec)
+
+    def _pts(key):
+        out = []
+        for i, e in enumerate(ec):
+            v = e.get(key)
+            if v is None:
+                continue
+            x = pad + (i / max(n - 1, 1)) * (W - 2 * pad)
+            y = pad + (1 - (v - lo) / rng) * (H - 2 * pad)
+            out.append(f"{x:.1f},{y:.1f}")
+        return " ".join(out)
+    base_y = pad + (1 - (cap - lo) / rng) * (H - 2 * pad)
+    svg = (f'<svg viewBox="0 0 {W} {H}" preserveAspectRatio="none" style="width:100%;height:200px;">'
+           f'<line x1="{pad}" y1="{base_y:.1f}" x2="{W-pad}" y2="{base_y:.1f}" stroke="#3a4450" stroke-dasharray="4 4" stroke-width="1"/>'
+           f'<polyline fill="none" stroke="#8b98a5" stroke-width="1.5" points="{_pts("bench")}"/>'
+           f'<polyline fill="none" stroke="#3fb27f" stroke-width="2.5" points="{_pts("value")}"/>'
+           f'</svg>')
+    tr = pf.get("total_return_pct", 0)
+    br = pf.get("bench_return_pct")
+    exc = pf.get("excess_pct")
+    hold_rows = ""
+    for h in pf.get("holdings", []):
+        r = h.get("return_pct")
+        col = "var(--green)" if (r or 0) >= 0 else "var(--red)"
+        hold_rows += (f'<tr><td><a href="https://finance.yahoo.co.jp/quote/{h["code"]}.T" target="_blank">{h["code"]}</a></td>'
+                      f'<td>{h.get("name","")}</td><td class="num muted">{h.get("entry_date","")}</td>'
+                      f'<td class="num">¥{h.get("invested",0):,}</td><td class="num">¥{h.get("value",0):,}</td>'
+                      f'<td class="num" style="color:{col};font-weight:700">{("—" if r is None else f"{r:+.1f}%")}</td></tr>')
+    portfolio_section_html = f"""
+  <h2>💰 ¥{cap:,} ルール運用シミュレーション</h2>
+  <p class="disclaimer">ルール: {pf.get('rule','')}。{pf.get('start_date','')}起点で遡及＋以降フォワード、分割・配当調整済のトータルリターン基準。<b>ペーパー（仮想）運用で実発注はありません。投資助言でもありません。</b>単元未満は¥枠で簡略化。買い候補は履歴から再現可能な近似（厳選×ROE）。</p>
+  <div class="kpis">
+    <div class="kpi"><div class="n {'green' if tr >= 0 else ''}">¥{pf.get('final_value',cap):,}</div><div class="l">現在の資産（開始¥{cap:,}）</div></div>
+    <div class="kpi"><div class="n {'green' if tr >= 0 else ''}">{tr:+.2f}%</div><div class="l">トータルリターン</div></div>
+    <div class="kpi"><div class="n" style="color:var(--red)">{('—' if br is None else f'{br:+.2f}%')}</div><div class="l">日経（同額）</div></div>
+    <div class="kpi"><div class="n gold">{('—' if exc is None else f'{exc:+.2f}%')}</div><div class="l">超過リターン</div></div>
+    <div class="kpi"><div class="n">{pf.get('max_drawdown_pct')}%</div><div class="l">最大ドローダウン</div></div>
+    <div class="kpi"><div class="n">{pf.get('n_holdings')}<span style="font-size:.9rem">銘柄</span></div><div class="l">現在の保有（現金¥{pf.get('cash',0):,}）</div></div>
+  </div>
+  <div class="card" style="padding:10px 14px;"><div style="display:flex;gap:14px;font-size:.72rem;color:var(--muted);margin-bottom:4px;"><span><span style="color:#3fb27f">━</span> ポートフォリオ</span><span><span style="color:#8b98a5">━</span> 日経(同額)</span><span>‑‑‑ 開始¥{cap:,}</span></div>{svg}</div>
+  <h2 style="font-size:.95rem;margin:16px 0 8px;">現在の保有（{pf.get('n_holdings')}銘柄）</h2>
+  <div class="card tablebox"><table><thead><tr><th>コード</th><th>社名</th><th class="num">購入日</th><th class="num">投資額</th><th class="num">評価額</th><th class="num">損益</th></tr></thead><tbody>{hold_rows}</tbody></table></div>
+"""
+else:
+    portfolio_section_html = ""
+
 
 def chips(items, cls):
     if not items:
@@ -200,6 +257,7 @@ html = f"""<!DOCTYPE html>
     <div class="kpi"><div class="n green">+{len(new_in)}</div><div class="l">新規イン（前回比）</div></div>
     <div class="kpi"><div class="n" style="color:var(--red)">-{len(dropped)}</div><div class="l">アウト（前回比）</div></div>
   </div>
+{portfolio_section_html}
 {track_section_html}
 {analysis_section_html}
   {'''<h2>🏆 Sランク厳選（割安 × 決算の質）</h2>

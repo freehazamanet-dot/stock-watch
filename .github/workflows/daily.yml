@@ -38,6 +38,7 @@ jobs:
           python deep_screener.py
           python tracker.py
           python analyze_signals.py
+          python portfolio.py
           python make_dashboard.py
 
       - name: Email notify (scheduled runs only)

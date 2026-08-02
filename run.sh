@@ -8,6 +8,7 @@ mkdir -p logs
   ./venv/bin/python deep_screener.py &&
   ./venv/bin/python tracker.py &&
   ./venv/bin/python analyze_signals.py &&
+  ./venv/bin/python portfolio.py &&
   ./venv/bin/python make_dashboard.py &&
   ./venv/bin/python notify.py
   echo "===== $(date '+%Y-%m-%d %H:%M:%S') run end (exit $?) ====="
